@@ -3,6 +3,8 @@ use std::{borrow::Cow, io::BufReader};
 use winit::{
     event::{Event, WindowEvent},
     event_loop::EventLoop,
+    keyboard::Key,
+    platform::modifier_supplement::KeyEventExtModifierSupplement,
     window::Window,
 };
 
@@ -11,6 +13,57 @@ struct MeshData {
     positions: Vec<[f32; 3]>,
     colors: Vec<[f32; 3]>,
     indexes: Vec<u32>,
+}
+
+fn create_render_pipeline(
+    device: &wgpu::Device,
+    pipeline_layout: &wgpu::PipelineLayout,
+    shader: &wgpu::ShaderModule,
+    swapchain_format: wgpu::TextureFormat,
+    polygon_mode: wgpu::PolygonMode,
+) -> wgpu::RenderPipeline {
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: None,
+        layout: Some(pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: "vs_main",
+            buffers: &[wgpu::VertexBufferLayout {
+                array_stride: 6 * std::mem::size_of::<f32>() as wgpu::BufferAddress,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &[
+                    wgpu::VertexAttribute {
+                        format: wgpu::VertexFormat::Float32x3,
+                        offset: 0,
+                        shader_location: 0,
+                    },
+                    wgpu::VertexAttribute {
+                        format: wgpu::VertexFormat::Float32x3,
+                        offset: 3 * std::mem::size_of::<f32>() as wgpu::BufferAddress,
+                        shader_location: 1,
+                    },
+                ],
+            }],
+            compilation_options: Default::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: "fs_main",
+            compilation_options: Default::default(),
+            targets: &[Some(swapchain_format.into())],
+        }),
+        primitive: wgpu::PrimitiveState {
+            polygon_mode,
+            cull_mode: Some(wgpu::Face::Back),
+            ..Default::default()
+        },
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState {
+            count: 4,
+            ..Default::default()
+        },
+        multiview: None,
+    })
 }
 
 fn create_multisampled_framebuffer(
@@ -110,47 +163,15 @@ async fn run(event_loop: EventLoop<()>, window: Window, mesh: MeshData) {
     let swapchain_capabilities = surface.get_capabilities(&adapter);
     let swapchain_format = swapchain_capabilities.formats[0];
 
-    let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: None,
-        layout: Some(&pipeline_layout),
-        vertex: wgpu::VertexState {
-            module: &shader,
-            entry_point: "vs_main",
-            buffers: &[wgpu::VertexBufferLayout {
-                array_stride: 6 * std::mem::size_of::<f32>() as wgpu::BufferAddress,
-                step_mode: wgpu::VertexStepMode::Vertex,
-                attributes: &[
-                    wgpu::VertexAttribute {
-                        format: wgpu::VertexFormat::Float32x3,
-                        offset: 0,
-                        shader_location: 0,
-                    },
-                    wgpu::VertexAttribute {
-                        format: wgpu::VertexFormat::Float32x3,
-                        offset: 3 * std::mem::size_of::<f32>() as wgpu::BufferAddress,
-                        shader_location: 1,
-                    },
-                ],
-            }],
-            compilation_options: Default::default(),
-        },
-        fragment: Some(wgpu::FragmentState {
-            module: &shader,
-            entry_point: "fs_main",
-            compilation_options: Default::default(),
-            targets: &[Some(swapchain_format.into())],
-        }),
-        primitive: wgpu::PrimitiveState {
-            // polygon_mode: wgpu::PolygonMode::Line,
-            ..Default::default()
-        },
-        depth_stencil: None,
-        multisample: wgpu::MultisampleState {
-            count: 4,
-            ..Default::default()
-        },
-        multiview: None,
-    });
+    let mut polygon_mode = wgpu::PolygonMode::Fill;
+
+    let mut render_pipeline = create_render_pipeline(
+        &device,
+        &pipeline_layout,
+        &shader,
+        swapchain_format,
+        polygon_mode,
+    );
 
     let mut config = surface
         .get_default_config(&adapter, size.width, size.height)
@@ -184,6 +205,27 @@ async fn run(event_loop: EventLoop<()>, window: Window, mesh: MeshData) {
                         framebuf = create_multisampled_framebuffer(&device, &config, 4);
                         // On macos the window needs to be redrawn manually after resizing
                         window.request_redraw();
+                    }
+                    WindowEvent::KeyboardInput { event, .. } => {
+                        if event.state == winit::event::ElementState::Released
+                            && event.key_without_modifiers().as_ref() == Key::Character("w")
+                        {
+                            polygon_mode = match polygon_mode {
+                                wgpu::PolygonMode::Fill => wgpu::PolygonMode::Line,
+                                wgpu::PolygonMode::Line => wgpu::PolygonMode::Point,
+                                wgpu::PolygonMode::Point => wgpu::PolygonMode::Fill,
+                            };
+
+                            render_pipeline = create_render_pipeline(
+                                &device,
+                                &pipeline_layout,
+                                &shader,
+                                swapchain_format,
+                                polygon_mode,
+                            );
+
+                            window.request_redraw();
+                        }
                     }
                     WindowEvent::RedrawRequested => {
                         let frame = surface
